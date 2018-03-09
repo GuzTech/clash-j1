@@ -42,7 +42,13 @@ stk (sp, mem) (instr, v) = ((sp', mem'), o)
 
 stack i = mealy stk (0 :: SP, repeat 0 :: StkMem) i
 
---topEntity :: Signal (BitVector 2) -> Signal Value -> Signal Value
+{-# ANN topEntity
+  (defTop
+    { t_name    = "Stack2"
+    , t_inputs  = ["i_instr", "i_value"]
+    , t_outputs = ["o_value"]
+}) #-}
+topEntity :: Signal SInstr -> Signal Value -> Signal Value
 topEntity i v = o
   where
     s = bundle (i, v)
