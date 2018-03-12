@@ -18,7 +18,13 @@ data Instr = ILit Literal
            | IJmp Address
            | ICJmp Address
            | ICall Address
-           | IALU Bool (Unsigned 4) Bool Bool Bool (Signed 2) (Signed 2)
+           | IALU (Bool,         -- R -> PC
+                   (Unsigned 4), -- ALU opcode, replaces T
+                   Bool,         -- T -> N
+                   Bool,         -- T -> R
+                   Bool,         -- N -> T
+                   (Signed 2),   -- Rstack +-
+                   (Signed 2))   -- Dstack +-
            deriving (Show, Eq)
 
 instance BitPack Instr where
@@ -28,38 +34,37 @@ instance BitPack Instr where
     IJmp a  -> (0 :: BitVector 3) ++# pack a
     ICJmp a -> (1 :: BitVector 3) ++# pack a
     ICall a -> (2 :: BitVector 3) ++# pack a
-    IALU rpc t tn tr nt rst dst ->
-      (3 :: BitVector 3) ++# pack rpc ++# pack t ++# pack tn ++# pack tr ++# pack nt ++# pack False ++# pack rst ++# pack dst
+    IALU (rpc, t, tn, tr, nt, rst, dst) ->
+      (3 :: BitVector 3) ++# pack (rpc, t, tn, tr, nt, (0 :: Bit), rst, dst)
   unpack bv = i
     where
       (type1, lit) = (split bv) :: (Bit, LitBV)          -- Encoding Type 1: Literal
       (type2, a)   = (split bv) :: (BitVector 3, AddrBV) -- Encoding Type 2: (C)Jmp, Call, ALU
-      (rpc, rest0) = (split a) :: (Bit, BitVector 12)    -- R->PC field
-      (t, rest1)   = (split rest0) :: (BitVector 4, BitVector 8) --ALU operation, replaces T
-      (tn, rest2)  = (split rest1) :: (Bit, BitVector 7) -- T->N
-      (tr, rest3)  = (split rest2) :: (Bit, BitVector 6) -- T->R
-      (nt, rest4)  = (split rest3) :: (Bit, BitVector 5) -- N->T
-      (u, rest5)   = (split rest4) :: (Bit, BitVector 4) -- Unused bit field
-      (rst, dst)   = (split rest5) :: (BitVector 2, BitVector 2)
-      --(rpc, t, tn, tr, nt, u, rst, dst) = (split a) :: (Bit, BitVector 4, Bit, Bit, Bit, Bit, BitVector 2, BitVector 2)
-      (rpc', t', tn', tr', nt', rst', dst') = ((unpack rpc) :: Bool, (unpack t) :: Unsigned 4, (unpack tn) :: Bool, (unpack tr) :: Bool, (unpack nt) :: Bool, (unpack rst) :: Signed 2, (unpack dst) :: Signed 2)
+      (rpc, t, tn, tr, nt, u, rst, dst) = (unpack a) :: (Bool, Unsigned 4, Bool, Bool, Bool, Bool, Signed 2, Signed 2)
       addr = (unpack a) :: Address
       i = case (type1, type2) of
         (1 :: Bit, _)         -> (ILit ((unpack lit) :: Literal))
         (_, 0 :: BitVector 3) -> (IJmp addr)
         (_, 1 :: BitVector 3) -> (ICJmp addr)
         (_, 2 :: BitVector 3) -> (ICall addr)
-        (_, 3 :: BitVector 3) -> (IALU rpc' t' tn' tr' nt' rst' dst')
+        (_, 3 :: BitVector 3) -> (IALU (rpc, t, tn, tr, nt, rst, dst))
 
-cpu :: (Address, SP) -> (BitVector 16) -> ((Address, SP), (Address, SP))
-cpu (pc, sp) bv = ((pc', sp'), (pc', sp'))
+cpu :: (Address, SP, SP) -> (BitVector 16) -> ((Address, SP, SP), (Address, SP, SP))
+cpu (pc, rsp, dsp) bv = ((pc', rsp', dsp'), (pc', rsp', dsp'))
   where
     i = (unpack bv) :: Instr
-    (pc', sp') = case i of
-      ILit l  -> (pc + 1, sp + 1)
-      IJmp a  -> (a, sp)
-      ICJmp a -> (a, sp)
-      ICall a -> (a, sp)
-      IALU rpc t tn tr nt rst dst -> (pc + 1, sp)
+    (pc', rsp', dsp') = case i of
+      ILit l  -> (pc + 1, rsp, dsp + 1)
+      IJmp a  -> (a, rsp, dsp)
+      ICJmp a -> (a, rsp, dsp)
+      ICall a -> (a, rsp + 1, dsp)
+      IALU (rpc, t, tn, tr, nt, rst, dst) -> (pc + 1, r, d)
+        where
+          se_r = signExtend rst :: Signed 3
+          se_d = signExtend dst :: Signed 3
+          r = ((unpack (pack se_r)) :: Unsigned 3) + rsp
+          d = ((unpack (pack se_d)) :: Unsigned 3) + dsp
 
-cpuM = mealy cpu (0 :: Address, 0 :: SP)
+cpuM = mealy cpu (0 :: Address, 0 :: SP, 0 :: SP)
+
+topEntity = cpuM
