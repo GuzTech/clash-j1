@@ -1,6 +1,8 @@
 module Cpu where
 import CLaSH.Prelude
 
+import Stack3
+
 --
 -- Types
 --
@@ -10,7 +12,7 @@ type Literal = Unsigned LitSize
 
 type AddrSize = 13
 type AddrBV   = BitVector AddrSize
-type Adddress = Unsigned AddrSize
+type Address  = Unsigned AddrSize
 
 data Instr = ILit Literal
            | IJmp Address
@@ -29,7 +31,7 @@ instance BitPack Instr where
   unpack bv = i
     where
       (iLit, lit) = (split bv) :: (BitVector 1, LitBV)
-      (iJmp, a)   = (split bv) :: (BitVector 3, Address)
+      (iJmp, a)   = (split bv) :: (BitVector 3, AddrBV)
       addr = (unpack a) :: Address
       i = case (iLit, iJmp) of
         (1 :: BitVector 1, _) -> (ILit ((unpack lit) :: Literal))
@@ -47,4 +49,4 @@ cpu (pc, sp) bv = ((pc', sp'), (pc', sp'))
       ICJmp a -> (a, sp)
       ICall a -> (a, sp)
 
-cpuM = mealy cpu (0 :: Address, 0 :: (Unsigned 3))
+cpuM = mealy cpu (0 :: Address, 0 :: SP)
