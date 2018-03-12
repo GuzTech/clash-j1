@@ -14,17 +14,73 @@ type AddrSize = 13
 type AddrBV   = BitVector AddrSize
 type Address  = Unsigned AddrSize
 
+type ALUtype  = BitVector 4
+data ALU = T         -- Top of stack
+         | N         -- Next on stack
+         | TplusN    -- T + N
+         | TandN     -- T & N
+         | TorN      -- T | N
+         | TxorN     -- T ^ N
+         | NegateT   -- ~T
+         | NeqT      -- N == T
+         | NltT      -- N < T
+         | NrshiftT  -- N right shift by T
+         | TminusOne -- T - 1
+         | R         -- R
+         | RefT      -- [T]
+         | NlshiftT  -- N left shift by T
+         | Depth     -- depth
+         | Nu_ltT    -- N unsigned < T
+         deriving (Show, Eq)
+
+instance BitPack ALU where
+  type BitSize ALU = 4
+  pack a = case a of
+    T         ->  0 :: ALUtype
+    N         ->  1 :: ALUtype
+    TplusN    ->  2 :: ALUtype
+    TandN     ->  3 :: ALUtype
+    TorN      ->  4 :: ALUtype
+    TxorN     ->  5 :: ALUtype
+    NegateT   ->  6 :: ALUtype
+    NeqT      ->  7 :: ALUtype
+    NltT      ->  8 :: ALUtype
+    NrshiftT  ->  9 :: ALUtype
+    TminusOne -> 10 :: ALUtype
+    R         -> 11 :: ALUtype
+    RefT      -> 12 :: ALUtype
+    NlshiftT  -> 13 :: ALUtype
+    Depth     -> 14 :: ALUtype
+    Nu_ltT    -> 15 :: ALUtype
+  unpack bv = case bv of
+    0  -> T
+    1  -> N
+    2  -> TplusN
+    3  -> TandN
+    4  -> TorN
+    5  -> TxorN
+    6  -> NegateT
+    7  -> NeqT
+    8  -> NltT
+    9  -> NrshiftT
+    10 -> TminusOne
+    11 -> R
+    12 -> RefT
+    13 -> NlshiftT
+    14 -> Depth
+    15 -> Nu_ltT
+
 data Instr = ILit Literal
            | IJmp Address
            | ICJmp Address
            | ICall Address
-           | IALU (Bool,         -- R -> PC
-                   (Unsigned 4), -- ALU opcode, replaces T
-                   Bool,         -- T -> N
-                   Bool,         -- T -> R
-                   Bool,         -- N -> T
-                   (Signed 2),   -- Rstack +-
-                   (Signed 2))   -- Dstack +-
+           | IALU (Bool,       -- R -> PC
+                   ALU,        -- ALU opcode, replaces T
+                   Bool,       -- T -> N
+                   Bool,       -- T -> R
+                   Bool,       -- N -> T
+                   (Signed 2), -- Rstack +-
+                   (Signed 2)) -- Dstack +-
            deriving (Show, Eq)
 
 instance BitPack Instr where
@@ -40,7 +96,7 @@ instance BitPack Instr where
     where
       (type1, lit) = (split bv) :: (Bit, LitBV)          -- Encoding Type 1: Literal
       (type2, a)   = (split bv) :: (BitVector 3, AddrBV) -- Encoding Type 2: (C)Jmp, Call, ALU
-      (rpc, t, tn, tr, nt, u, rst, dst) = (unpack a) :: (Bool, Unsigned 4, Bool, Bool, Bool, Bool, Signed 2, Signed 2)
+      (rpc, t, tn, tr, nt, u, rst, dst) = (unpack a) :: (Bool, ALU, Bool, Bool, Bool, Bool, Signed 2, Signed 2)
       addr = (unpack a) :: Address
       i = case (type1, type2) of
         (1 :: Bit, _)         -> (ILit ((unpack lit) :: Literal))
