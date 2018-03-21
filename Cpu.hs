@@ -1,7 +1,9 @@
 module Cpu where
 import CLaSH.Prelude
 
-import Stack3
+import Types
+import Stack
+import ALU
 
 --
 -- Types
@@ -10,21 +12,18 @@ type LitSize = 15
 type LitBV   = BitVector LitSize
 type Literal = Unsigned LitSize
 
-type AddrSize = 13
-type AddrBV   = BitVector AddrSize
-type Address  = Unsigned AddrSize
-
+type ALUFields = (Bool,     -- R -> PC
+                  ALU,      -- ALU opcode
+                  Bool,     -- T -> N
+                  Bool,     -- T -> R
+                  Bool,     -- N -> T
+                  Signed 2, -- Rstack +-
+                  Signed 2) -- Dstack +-
 data Instr = ILit Literal
            | IJmp Address
            | ICJmp Address
            | ICall Address
-           | IALU (Bool,         -- R -> PC
-                   (Unsigned 4), -- ALU opcode, replaces T
-                   Bool,         -- T -> N
-                   Bool,         -- T -> R
-                   Bool,         -- N -> T
-                   (Signed 2),   -- Rstack +-
-                   (Signed 2))   -- Dstack +-
+           | IALU ALUFields
            deriving (Show, Eq)
 
 instance BitPack Instr where
@@ -34,37 +33,108 @@ instance BitPack Instr where
     IJmp a  -> (0 :: BitVector 3) ++# pack a
     ICJmp a -> (1 :: BitVector 3) ++# pack a
     ICall a -> (2 :: BitVector 3) ++# pack a
-    IALU (rpc, t, tn, tr, nt, rst, dst) ->
-      (3 :: BitVector 3) ++# pack (rpc, t, tn, tr, nt, (0 :: Bit), rst, dst)
+    IALU (r_pc, t, t_n, t_r, nt, rst, dst) ->
+      (3 :: BitVector 3) ++# pack (r_pc, t, t_n, t_r, nt, (0 :: Bit), rst, dst)
   unpack bv = i
     where
       (type1, lit) = (split bv) :: (Bit, LitBV)          -- Encoding Type 1: Literal
       (type2, a)   = (split bv) :: (BitVector 3, AddrBV) -- Encoding Type 2: (C)Jmp, Call, ALU
-      (rpc, t, tn, tr, nt, u, rst, dst) = (unpack a) :: (Bool, Unsigned 4, Bool, Bool, Bool, Bool, Signed 2, Signed 2)
+      (r_pc, t, t_n, t_r, nt, u, rst, dst) = (unpack a) :: (Bool, ALU, Bool, Bool, Bool, Bool, Signed 2, Signed 2)
       addr = (unpack a) :: Address
       i = case (type1, type2) of
         (1 :: Bit, _)         -> (ILit ((unpack lit) :: Literal))
         (_, 0 :: BitVector 3) -> (IJmp addr)
         (_, 1 :: BitVector 3) -> (ICJmp addr)
         (_, 2 :: BitVector 3) -> (ICall addr)
-        (_, 3 :: BitVector 3) -> (IALU (rpc, t, tn, tr, nt, rst, dst))
+        (_, 3 :: BitVector 3) -> (IALU (r_pc, t, t_n, t_r, nt, rst, dst))
 
-cpu :: (Address, SP, SP) -> (BitVector 16) -> ((Address, SP, SP), (Address, SP, SP))
-cpu (pc, rsp, dsp) bv = ((pc', rsp', dsp'), (pc', rsp', dsp'))
+--
+-- Functions
+--
+decode_pc :: Address -> (Instr, Bool) -> (Address, Address)
+decode_pc pc (instr, t) = (pc', pc')
   where
-    i = (unpack bv) :: Instr
-    (pc', rsp', dsp') = case i of
-      ILit l  -> (pc + 1, rsp, dsp + 1)
-      IJmp a  -> (a, rsp, dsp)
-      ICJmp a -> (a, rsp, dsp)
-      ICall a -> (a, rsp + 1, dsp)
-      IALU (rpc, t, tn, tr, nt, rst, dst) -> (pc + 1, r, d)
-        where
-          se_r = signExtend rst :: Signed 3
-          se_d = signExtend dst :: Signed 3
-          r = ((unpack (pack se_r)) :: Unsigned 3) + rsp
-          d = ((unpack (pack se_d)) :: Unsigned 3) + dsp
+    pc' = case instr of
+      IJmp a  -> a
+      ICall a -> a
+      ICJmp a -> case t of
+                   True -> a
+                   False -> pc + 1
+      _       -> pc + 1
 
-cpuM = mealy cpu (0 :: Address, 0 :: SP, 0 :: SP)
+calc_sptrs :: (SP, SP) -> (Signed 2, Signed 2) -> ((SP, SP), (SP, SP))
+calc_sptrs (rsp, dsp) (rst, dst) = ((rsp', dsp'), (rsp', dsp'))
+  where
+    se_rst = signExtend rst :: Signed SizeB
+    se_dst = signExtend dst :: Signed SizeB
+    r = (unpack (pack se_rst)) + rsp
+    d = (unpack (pack se_dst)) + dsp
+    (rsp', dsp') = (r, d)
 
-topEntity = cpuM
+system :: BitV -> Value -> Signal (SP, SP, DstMem, Address, Value, Value, Value, Bool)
+system instr_bv tref = o
+  where
+    -- Decode the instruction
+    instr = (unpack instr_bv) :: Instr
+
+    -- Get bit fields if the instruction is an ALU instruction
+    (r_pc, alu_op, t_n, t_r, n_t, rst, dst) = case instr of
+      ILit _                              -> (False, T, False, False, False, 0, 1)
+      ICall _                             -> (False, T, False, False, False, 1, 0)
+      IALU (rpc, t, tn, tr, nt, rst, dst) -> (rpc, t, tn, tr, nt, rst, dst)
+      _                                   -> (False, T, False, False, False, 0, 0)
+
+    -- Calculate new rsp and dsp
+    (rsp, dsp) = unbundle $ mealy calc_sptrs (-1, -1) (pure (rst, dst))
+
+    -- Determine if we want to push on to the data stack
+    dstkW = case instr of
+      ILit _ -> True
+      IALU _ -> t_n
+      _      -> False
+
+    -- Determine if we want to push on to the return stack
+    rstkW = case instr of
+      ICall _ -> True
+      IALU _  -> t_r
+      _       -> False
+
+    -- Determine the data to push onto the return stack
+    tosAsAddrBV16 = pack <$> tos
+    tosAsAddrBV13 = (resize <$> tosAsAddrBV16) :: Signal (BitVector 13)
+    rstkD = case instr of
+      ICall a -> pure a
+      _       -> unpack <$> tosAsAddrBV13
+
+    -- Calculate the new program counter
+    pc = mealy decode_pc 0 (bundle (pure instr, unpack <$> (lsb <$> (pack <$> tos))))
+
+    -- Get the top of stack and next on stack values for the data stack, and top of the return stack
+    (dmem, tos, nos) = unbundle $ mealy st (repeat 0 :: DstMem) $ bundle (dsp, pure dstkW, st0N)
+    (_, r, _)     = unbundle $ mealy st (repeat 0 :: RstMem) $ bundle (rsp, pure rstkW, (pc + 1))
+
+    -- Perform the ALU operation
+    tos' = alu <$> tos <*> nos <*> r <*> (pure tref) <*> (pure alu_op)
+
+    -- Determine data stack value to write
+    st0N = case instr of
+      ILit l -> pure (unpack ((0 :: Bit) ++# (pack l)) :: Value)
+      IALU _ -> tos'
+
+    -- Output
+    o = bundle (rsp, dsp, dmem, pc, st0N, tos, nos, pure dstkW)
+
+{-# ANN topEntity
+  (defTop
+    { t_name    = "cl_j1a"
+    , t_inputs  = ["i_instr", "i_tref"]
+    , t_outputs = ["o_rsp", "o_dsp", "o_pc", "o_tosN", "o_tos", "o_nos", "o_dstkW"]
+}) #-}
+topEntity = system
+
+x1 = pack (ILit 15)
+x2 = pack (IALU (False, TplusN, False, False, False, 0, -1))
+x3 = pack (IJmp 24)
+z1 = system x1 0
+z2 = system x2 0
+z3 = system x3 0
