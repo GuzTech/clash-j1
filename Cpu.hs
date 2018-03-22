@@ -71,6 +71,13 @@ calc_sptrs (rsp, dsp) (rst, dst) = ((rsp', dsp'), (rsp', dsp'))
     d = (unpack (pack se_dst)) + dsp
     (rsp', dsp') = (r, d)
 
+decode_st0N st0 (instr, t) = (st0N, st0N)
+  where
+    st0N = case instr of
+      ILit l  -> unpack ((0 :: Bit) ++# (pack l)) :: Value
+      IALU _  -> t
+      _       -> st0
+
 system :: BitV -> Value -> Signal (SP, SP, DstMem, Address, Value, Value, Value, Bool)
 system instr_bv tref = o
   where
@@ -110,16 +117,14 @@ system instr_bv tref = o
     pc = mealy decode_pc 0 (bundle (pure instr, unpack <$> (lsb <$> (pack <$> tos))))
 
     -- Get the top of stack and next on stack values for the data stack, and top of the return stack
-    (dmem, tos, nos) = unbundle $ mealy st (repeat 0 :: DstMem) $ bundle (dsp, pure dstkW, st0N)
+    (dmem, tos, nos) = unbundle $ mealy st (repeat 4 :: DstMem) $ bundle (dsp, pure dstkW, st0N)
     (_, r, _)     = unbundle $ mealy st (repeat 0 :: RstMem) $ bundle (rsp, pure rstkW, (pc + 1))
 
     -- Perform the ALU operation
     tos' = alu <$> tos <*> nos <*> r <*> (pure tref) <*> (pure alu_op)
 
     -- Determine data stack value to write
-    st0N = case instr of
-      ILit l -> pure (unpack ((0 :: Bit) ++# (pack l)) :: Value)
-      IALU _ -> tos'
+    st0N = mealy decode_st0N (0 :: Value) $ bundle (pure instr, tos')
 
     -- Output
     o = bundle (rsp, dsp, dmem, pc, st0N, tos, nos, pure dstkW)
