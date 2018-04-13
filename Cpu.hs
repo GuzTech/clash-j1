@@ -110,7 +110,7 @@ system instr_bv tref = o
 
     -- Determine the data to push onto the return stack
     tosAsAddrBV16 = pack <$> tos
-    tosAsAddrBV13 = (resize <$> tosAsAddrBV16) :: Signal (BitVector 13)
+    tosAsAddrBV13 = (resize <$> tosAsAddrBV16) :: Signal ClkDom (BitVector 13)
     rstkD = case instr of
       ICall a -> pure a
       _       -> unpack <$> tosAsAddrBV13
