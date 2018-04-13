@@ -1,5 +1,5 @@
 module Cpu where
-import CLaSH.Prelude
+import Clash.Prelude
 
 import Types
 import Stack
@@ -8,6 +8,8 @@ import ALU
 --
 -- Types
 --
+type ClkDom = Dom "system" 20000
+
 type LitSize = 15
 type LitBV   = BitVector LitSize
 type Literal = Unsigned LitSize
@@ -78,7 +80,7 @@ decode_st0N st0 (instr, t) = (st0N, st0N)
       IALU _  -> t
       _       -> st0
 
-system :: BitV -> Value -> Signal (SP, SP, DstMem, Address, Value, Value, Value, Bool)
+system :: BitV -> Value -> Signal ClkDom (SP, SP, DstMem, Address, Value, Value, Value, Bool)
 system instr_bv tref = o
   where
     -- Decode the instruction
@@ -130,10 +132,10 @@ system instr_bv tref = o
     o = bundle (rsp, dsp, dmem, pc, st0N, tos, nos, pure dstkW)
 
 {-# ANN topEntity
-  (defTop
-    { t_name    = "cl_j1a"
-    , t_inputs  = ["i_instr", "i_tref"]
-    , t_outputs = ["o_rsp", "o_dsp", "o_pc", "o_tosN", "o_tos", "o_nos", "o_dstkW"]
+  (Synthesize
+    { t_name   = "cl_j1a"
+    , t_inputs = [PortName "i_instr", PortName "i_tref"]
+    , t_output = PortProduct "output" [PortName "o_rsp", PortName "o_dsp", PortName "o_pc", PortName "o_tosN", PortName "o_tos", PortName "o_nos", PortName "o_dstkW"]
 }) #-}
 topEntity = system
 
