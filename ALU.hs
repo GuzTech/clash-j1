@@ -1,5 +1,5 @@
 module ALU where
-import CLaSH.Prelude
+import Clash.Prelude
 
 import Types
 

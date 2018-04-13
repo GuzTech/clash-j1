@@ -1,5 +1,5 @@
 module Stack where
-import CLaSH.Prelude
+import Clash.Prelude
 import Types
 
 st mem (sp, push, v) = (mem', (mem', tos, nos))

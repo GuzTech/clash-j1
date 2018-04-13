@@ -1,5 +1,5 @@
 module Types where
-import CLaSH.Prelude
+import Clash.Prelude
 
 -- Generic
 type IWidth = 16

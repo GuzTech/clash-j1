@@ -1,5 +1,5 @@
 module Stack3 where
-import CLaSH.Prelude
+import Clash.Prelude
 
 --
 -- Types
@@ -40,19 +40,30 @@ stk (sp, mem) (instr, v) = ((sp', mem'), o)
       PopPush -> mem !! (sp - 1)
       _       -> 0
 
-stack i = mealy stk (0 :: SP, repeat 0 :: StkMem) i
+stack = mealy stk (0 :: SP, repeat 0 :: StkMem)
+
+type Dom50 = Dom "System" 20000
 
 {-# ANN topEntity
-  (defTop
-    { t_name    = "Stack3"
-    , t_inputs  = ["i_instr", "i_value"]
-    , t_outputs = ["o_value"]
-}) #-}
-topEntity :: Signal SInstr -> Signal Value -> Signal Value
-topEntity i v = o
+  (Synthesize
+    { t_name   = "Stack3"
+    , t_inputs = [PortName "i_clk", PortName "i_rst", PortName "i_instr", PortName "i_value"]
+    , t_output = PortName "o_value"
+    }) #-}
+topEntity
+--  :: SystemClockReset
+  :: Clock Dom50 Source
+  -> Reset Dom50 Synchronous
+--  -> Signal Dom50 (SInstr, Value)
+  -> Signal Dom50 SInstr
+  -> Signal Dom50 Value
+  -> Signal Dom50 Value
+--topEntity = exposeClockReset stack
+topEntity clk rst i v = o
   where
     s = bundle (i, v)
-    o = stack s
+    o = exposeClockReset (stack s) clk rst
+--    o = withClockReset clk rst stack s
 
 --
 -- Simulation
