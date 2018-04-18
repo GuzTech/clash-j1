@@ -1,5 +1,5 @@
 module Cpu where
-import CLaSH.Prelude
+import Clash.Prelude
 
 import Types
 import Stack
@@ -29,7 +29,7 @@ data Instr = ILit Literal
 instance BitPack Instr where
   type BitSize Instr = 16
   pack i = case i of
-    ILit l  -> (1 :: Bit) ++# pack l
+    ILit l  -> (1 :: BitVector 1) ++# pack l
     IJmp a  -> (0 :: BitVector 3) ++# pack a
     ICJmp a -> (1 :: BitVector 3) ++# pack a
     ICall a -> (2 :: BitVector 3) ++# pack a
@@ -37,12 +37,12 @@ instance BitPack Instr where
       (3 :: BitVector 3) ++# pack (r_pc, t, t_n, t_r, nt, (0 :: Bit), rst, dst)
   unpack bv = i
     where
-      (type1, lit) = (split bv) :: (Bit, LitBV)          -- Encoding Type 1: Literal
+      (type1, lit) = (split bv) :: (BitVector 1, LitBV)  -- Encoding Type 1: Literal
       (type2, a)   = (split bv) :: (BitVector 3, AddrBV) -- Encoding Type 2: (C)Jmp, Call, ALU
       (r_pc, t, t_n, t_r, nt, u, rst, dst) = (unpack a) :: (Bool, ALU, Bool, Bool, Bool, Bool, Signed 2, Signed 2)
       addr = (unpack a) :: Address
       i = case (type1, type2) of
-        (1 :: Bit, _)         -> (ILit ((unpack lit) :: Literal))
+        (1 :: BitVector 1, _) -> (ILit ((unpack lit) :: Literal))
         (_, 0 :: BitVector 3) -> (IJmp addr)
         (_, 1 :: BitVector 3) -> (ICJmp addr)
         (_, 2 :: BitVector 3) -> (ICall addr)
@@ -74,11 +74,12 @@ calc_sptrs (rsp, dsp) (rst, dst) = ((rsp', dsp'), (rsp', dsp'))
 decode_st0N st0 (instr, t) = (st0N, st0N)
   where
     st0N = case instr of
-      ILit l  -> unpack ((0 :: Bit) ++# (pack l)) :: Value
+      ILit l  -> unpack ((0 :: BitVector 1) ++# (pack l)) :: Value
       IALU _  -> t
       _       -> st0
 
-system :: BitV -> Value -> Signal (SP, SP, DstMem, Address, Value, Value, Value, Bool)
+--system :: BitV -> Value -> Signal System (SP, SP, DstMem, Address, Value, Value, Value, Bool)
+--system :: BitV -> Value -> Clock System Source -> Reset System Asynchronous -> Signal System (SP, SP)
 system instr_bv tref = o
   where
     -- Decode the instruction
@@ -108,17 +109,17 @@ system instr_bv tref = o
 
     -- Determine the data to push onto the return stack
     tosAsAddrBV16 = pack <$> tos
-    tosAsAddrBV13 = (resize <$> tosAsAddrBV16) :: Signal (BitVector 13)
+    tosAsAddrBV13 = (resize <$> tosAsAddrBV16) :: Signal System (BitVector 13)
     rstkD = case instr of
       ICall a -> pure a
       _       -> unpack <$> tosAsAddrBV13
 
     -- Calculate the new program counter
-    pc = mealy decode_pc 0 (bundle (pure instr, unpack <$> (lsb <$> (pack <$> tos))))
+    pc = mealy decode_pc 0 $ bundle (pure instr, unpack <$> pack <$> (lsb <$> tosAsAddrBV16))
 
     -- Get the top of stack and next on stack values for the data stack, and top of the return stack
     (dmem, tos, nos) = unbundle $ mealy st (repeat 4 :: DstMem) $ bundle (dsp, pure dstkW, st0N)
-    (_, r, _)     = unbundle $ mealy st (repeat 0 :: RstMem) $ bundle (rsp, pure rstkW, (pc + 1))
+    (_, r, _)        = unbundle $ mealy st (repeat 0 :: RstMem) $ bundle (rsp, pure rstkW, (pc + 1))
 
     -- Perform the ALU operation
     tos' = alu <$> tos <*> nos <*> r <*> (pure tref) <*> (pure alu_op)
@@ -127,19 +128,21 @@ system instr_bv tref = o
     st0N = mealy decode_st0N (0 :: Value) $ bundle (pure instr, tos')
 
     -- Output
-    o = bundle (rsp, dsp, dmem, pc, st0N, tos, nos, pure dstkW)
+    --o = bundle (rsp, dsp, dmem, pc, st0N, tos, nos, pure dstkW)
+    o = bundle (rsp, dsp)
 
 {-# ANN topEntity
-  (defTop
-    { t_name    = "cl_j1a"
-    , t_inputs  = ["i_instr", "i_tref"]
-    , t_outputs = ["o_rsp", "o_dsp", "o_pc", "o_tosN", "o_tos", "o_nos", "o_dstkW"]
+  (Synthesize
+    { t_name   = "cl_j1a"
+    , t_inputs = [PortName "i_clk", PortName "i_rst", PortName "i_instr", PortName "i_tref"]
+    , t_output = PortProduct "output" [PortName "o_rsp", PortName "o_dsp"]
 }) #-}
-topEntity = system
+topEntity :: Clock System Source -> Reset System Asynchronous -> BitV -> Value -> Signal System (SP, SP)
+topEntity = exposeClockReset system
 
-x1 = pack (ILit 15)
-x2 = pack (IALU (False, TplusN, False, False, False, 0, -1))
-x3 = pack (IJmp 24)
-z1 = system x1 0
-z2 = system x2 0
-z3 = system x3 0
+--x1 = pack (ILit 15)
+--x2 = pack (IALU (False, TplusN, False, False, False, 0, -1))
+--x3 = pack (IJmp 24)
+--z1 = system x1 0
+--z2 = system x2 0
+--z3 = system x3 0
